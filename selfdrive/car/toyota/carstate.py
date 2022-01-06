@@ -22,7 +22,6 @@ class CarState(CarStateBase):
     self.needs_angle_offset = True
     self.accurate_steer_angle_seen = False
     self.angle_offset = FirstOrderFilter(None, 60.0, DT_CTRL, initialized=False)
-    self.has_zss = CP.hasZss
 
     self.low_speed_lockout = False
     self.acc_type = 1
@@ -113,7 +112,6 @@ class CarState(CarStateBase):
     # we could use the override bit from dbc, but it's triggered at too high torque values
     ret.steeringPressed = abs(ret.steeringTorque) > STEER_THRESHOLD
 
-
     if self.CP.carFingerprint in [CAR.LEXUS_IS, CAR.LEXUS_RC]:
       ret.cruiseState.available = cp.vl["DSU_CRUISE"]["MAIN_ON"] != 0
       ret.cruiseState.speed = cp.vl["DSU_CRUISE"]["SET_SPEED"] * CV.KPH_TO_MS
@@ -180,7 +178,6 @@ class CarState(CarStateBase):
     ret.stockAeb = bool(cp_cam.vl["PRE_COLLISION"]["PRECOLLISION_ACTIVE"] and cp_cam.vl["PRE_COLLISION"]["FORCE"] < -1e-5)
 
     ret.espDisabled = cp.vl["ESP_CONTROL"]["TC_DISABLED"] != 0
-    # 2 is standby, 10 is active. TODO: check that everything else is really a faulty state
 
     if self.CP.enableBsm:
       ret.leftBlindspot = (cp.vl["BSM"]["L_ADJACENT"] == 1) or (cp.vl["BSM"]["L_APPROACHING"] == 1)
@@ -219,7 +216,6 @@ class CarState(CarStateBase):
       ("TURN_SIGNALS", "STEERING_LEVERS", 3),   # 3 is no blinkers
       ("LKA_STATE", "EPS_STATUS", 0),
       ("AUTO_HIGH_BEAM", "LIGHT_STALK", 0),
-      ("BRAKE_LIGHTS_ACC", "ESP_CONTROL", 0),
     ]
 
     checks = [
@@ -247,10 +243,6 @@ class CarState(CarStateBase):
       signals.append(("LOW_SPEED_LOCKOUT", "PCM_CRUISE_2", 0))
       checks.append(("PCM_CRUISE_2", 33))
 
-    if CP.hasZss:
-      signals.append(("ZORRO_STEER", "SECONDARY_STEER_ANGLE", 0))
-      checks.append(("SECONDARY_STEER_ANGLE", 80))
-
     # add gas interceptor reading if we are using it
     if CP.enableGasInterceptor:
       signals.append(("INTERCEPTOR_GAS", "GAS_SENSOR", 0))
@@ -267,10 +259,6 @@ class CarState(CarStateBase):
       checks += [
         ("BSM", 1)
       ]
-
-    if CP.carFingerprint in TSS2_CAR:
-      signals.append(("DISTANCE_LINES", "PCM_CRUISE_SM", 0))
-      checks.append(("PCM_CRUISE_SM", 1))
 
     return CANParser(DBC[CP.carFingerprint]["pt"], signals, checks, 0)
 
