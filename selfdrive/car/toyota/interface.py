@@ -26,6 +26,8 @@ class CarInterface(CarInterfaceBase):
 
     ret.steerActuatorDelay = 0.12  # Default delay, Prius has larger delay
     ret.steerLimitTimer = 0.4
+    ret.hasZss = 0x23 in fingerprint[0]  # Detect whether car has accurate ZSS
+    ret.steerRateCost = 0.5 if ret.hasZss else 1.0
 
     ret.stoppingControl = False  # Toyota starts braking more when it thinks you want to stop
 
@@ -346,60 +348,16 @@ class CarInterface(CarInterfaceBase):
     # events
     events = self.create_common_events(ret, extra_gears=extraGears, pcm_enable=False)
 
-    #if self.CS.low_speed_lockout and self.CP.openpilotLongitudinalControl:
-      #events.add(EventName.lowSpeedLockout)
-    #if ret.vEgo < self.CP.minEnableSpeed and self.CP.openpilotLongitudinalControl:
-      #events.add(EventName.belowEngageSpeed)
-      #if c.actuators.accel > 0.3:
+    if self.CS.low_speed_lockout and self.CP.openpilotLongitudinalControl:
+      events.add(EventName.lowSpeedLockout)
+    if ret.vEgo < self.CP.minEnableSpeed and self.CP.openpilotLongitudinalControl:
+      events.add(EventName.belowEngageSpeed)
+      if c.actuators.accel > 0.3:
         # some margin on the actuator to not false trigger cancellation while stopping
-        #events.add(EventName.speedTooLow)
-      #if ret.vEgo < 0.001:
+        events.add(EventName.speedTooLow)
+      if ret.vEgo < 0.001:
         # while in standstill, send a user alert
-        #events.add(EventName.manualRestart)
-
-    self.CS.disengageByBrake = self.CS.disengageByBrake or ret.disengageByBrake
-
-    enable_pressed = False
-    enable_from_brake = False
-
-    if self.CS.disengageByBrake and not ret.brakePressed and not ret.brakeHoldActive and self.CS.lkasEnabled:
-      enable_pressed = True
-      enable_from_brake = True
-
-    if not ret.brakePressed and not ret.brakeHoldActive:
-      self.CS.disengageByBrake = False
-      ret.disengageByBrake = False
-
-    # handle button presses
-    for b in ret.buttonEvents:
-
-      # do enable on both accel and decel buttons
-      if b.type in [ButtonType.setCruise] and not b.pressed:
-        enable_pressed = True
-
-      # do disable on LKAS button if ACC is disabled
-      if b.type in [ButtonType.altButton1] and b.pressed:
-        if not self.CS.lkasEnabled: #disabled LKAS
-          if not ret.cruiseState.enabled:
-            events.add(EventName.buttonCancel)
-          else:
-            events.add(EventName.manualSteeringRequired)
-        else: #enabled LKAS
-          if not ret.cruiseState.enabled:
-            enable_pressed = True
-
-      # do disable on button down
-      if b.type == ButtonType.cancel and b.pressed:
-        if not self.CS.lkasEnabled:
-          events.add(EventName.buttonCancel)
-        else:
-          events.add(EventName.manualLongitudinalRequired)
-
-    if (ret.cruiseState.enabled or self.CS.lkasEnabled) and enable_pressed:
-      if enable_from_brake:
-        events.add(EventName.silentButtonEnable)
-      else:
-        events.add(EventName.buttonEnable)
+        events.add(EventName.manualRestart)
 
     ret.events = events.to_msg()
 

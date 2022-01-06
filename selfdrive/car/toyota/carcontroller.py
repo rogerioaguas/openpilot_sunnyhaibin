@@ -8,8 +8,23 @@ from selfdrive.car.toyota.toyotacan import create_steer_command, create_ui_comma
 from selfdrive.car.toyota.values import CAR, STATIC_DSU_MSGS, NO_STOP_TIMER_CAR, TSS2_CAR, \
                                         MIN_ACC_SPEED, PEDAL_TRANSITION, CarControllerParams
 from opendbc.can.packer import CANPacker
+from common.op_params import opParams
+
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 
+
+def coast_accel(speed):  # given a speed, output coasting acceleration
+  points = [[0.0, 0.03], [.166, .424], [.335, .568],
+            [.731, .440], [1.886, 0.262], [2.809, -0.207],
+            [3.443, -0.249], [MIN_ACC_SPEED, -0.145]]
+  return interp(speed, *zip(*points))
+
+
+def compute_gb_pedal(accel, speed):
+  _a3, _a4, _a5, _offset, _e1, _e2, _e3, _e4, _e5, _e6, _e7, _e8 = [-0.07264304340456754, -0.007522016704006004, 0.16234124452228196, 0.0029096574419830296, 1.1674372321165579e-05, -0.008010070095545522, -5.834025253616562e-05, 0.04722441060805912, 0.001887454016549489, -0.0014370672920621269, -0.007577594283906699, 0.01943515032956308]
+  speed_part = (_e5 * accel + _e6) * speed ** 2 + (_e7 * accel + _e8) * speed
+  accel_part = ((_e1 * speed + _e2) * accel ** 5 + (_e3 * speed + _e4) * accel ** 4 + _a3 * accel ** 3 + _a4 * accel ** 2 + _a5 * accel)
+  return speed_part + accel_part + _offset
 
 class CarController():
   def __init__(self, dbc_name, CP, VM):
@@ -19,6 +34,8 @@ class CarController():
     self.standstill_req = False
     self.steer_rate_limited = False
     self.signal_last = 0.
+    self.use_interceptor = False
+    self.standstill_hack = opParams().get('standstill_hack')
 
     self.packer = CANPacker(dbc_name)
 
@@ -28,6 +45,9 @@ class CarController():
     # *** compute control surfaces ***
 
     # gas and brake
+    interceptor_gas_cmd = 0.
+    pcm_accel_cmd = actuators.accel
+
     if CS.CP.enableGasInterceptor and enabled and CS.out.cruiseState.enabled:
       MAX_INTERCEPTOR_GAS = 0.5
       # RAV4 has very sensitive gas pedal
@@ -40,7 +60,7 @@ class CarController():
       # offset for creep and windbrake
       pedal_offset = interp(CS.out.vEgo, [0.0, 2.3, MIN_ACC_SPEED + PEDAL_TRANSITION], [-.4, 0.0, 0.2])
       pedal_command = PEDAL_SCALE * (actuators.accel + pedal_offset)
-      interceptor_gas_cmd = clip(pedal_command, 0., MAX_INTERCEPTOR_GAS)
+      interceptor_gas_cmd = clip(compute_gb_pedal(pedal_command, CS.out.vEgo), 0., MAX_INTERCEPTOR_GAS)
     else:
       interceptor_gas_cmd = 0.
     pcm_accel_cmd = 0 if not (enabled and CS.out.cruiseState.enabled) else clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX)
@@ -64,17 +84,19 @@ class CarController():
 
     # TODO: probably can delete this. CS.pcm_acc_status uses a different signal
     # than CS.cruiseState.enabled. confirm they're not meaningfully different
-    #if not enabled and CS.pcm_acc_status:
-      #pcm_cancel_cmd = 1
+    if not enabled and CS.pcm_acc_status:
+      # send pcm acc cancel cmd if drive is disabled but pcm is still on, or if the system can't be activated
+      pcm_cancel_cmd = 1
 
     # on entering standstill, send standstill request
-    if CS.out.standstill and not self.last_standstill and CS.CP.carFingerprint not in NO_STOP_TIMER_CAR:
+    if CS.out.standstill and not self.last_standstill and CS.CP.carFingerprint not in NO_STOP_TIMER_CAR and not self.standstill_hack:
       self.standstill_req = True
     if CS.pcm_acc_status != 8:
       # pcm entered standstill or it's disabled
       self.standstill_req = False
 
     self.last_steer = apply_steer
+    self.last_accel = pcm_accel_cmd
     self.last_standstill = CS.out.standstill
 
     can_sends = []
